@@ -1,0 +1,15 @@
+{
+  "name": "shared-computer",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "dev": "bun --watch server/index.ts",
+    "start": "NODE_ENV=production bun server/index.ts",
+    "check": "tsc --noEmit",
+    "build:web": "bun scripts/build-web.ts"
+  },
+  "devDependencies": {
+    "@types/bun": "latest",
+    "typescript": "^5.6.0"
+  }
+}

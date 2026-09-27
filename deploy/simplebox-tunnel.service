@@ -1,0 +1,15 @@
+# The Cloudflare Tunnel that makes the box reachable at https://box.anb.codes. Install with:
+#   sudo cp deploy/simplebox-tunnel.service /etc/systemd/system/ && sudo systemctl enable --now simplebox-tunnel
+[Unit]
+Description=Cloudflare Tunnel for the anb.codes box
+After=network-online.target simplebox.service
+Wants=network-online.target
+
+[Service]
+User=andrew
+ExecStart=/usr/bin/cloudflared --no-autoupdate tunnel --config /home/andrew/storage/code/shared-computer/deploy/cloudflared.yml run
+Restart=on-failure
+RestartSec=5
+
+[Install]
+WantedBy=multi-user.target

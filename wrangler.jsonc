@@ -1,0 +1,9 @@
+// The computer (the static web app) on Cloudflare, at https://simplebox.anb.codes.
+// Build first: `bun run build:web anb.codes`, then `npx wrangler deploy`.
+{
+  "name": "simplebox",
+  "account_id": "79d73bbcd0d98228abaa048eac36ca3c",
+  "compatibility_date": "2026-09-01",
+  "assets": { "directory": "./dist/web" },
+  "routes": [{ "pattern": "simplebox.anb.codes", "custom_domain": true }]
+}

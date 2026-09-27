@@ -1,0 +1,29 @@
+# Deploys the computer (the static web app) to https://simplebox.anb.codes on every
+# push to main. Needs the repo secret CLOUDFLARE_API_TOKEN: a Cloudflare API token
+# with "Workers Scripts: Edit" (and "Workers Routes: Edit" for the custom domain)
+# on the anb.codes account.
+#
+# The box itself isn't deployed from here: it runs on its own machine (see README).
+name: Deploy web app
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+concurrency:
+  group: deploy-web
+  cancel-in-progress: true
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: oven-sh/setup-bun@v2
+      - run: bun install --frozen-lockfile
+      - run: bun run check
+      - run: bun run build:web anb.codes
+      - run: bunx wrangler deploy
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}

@@ -1,0 +1,136 @@
+WRITING PROGRAMS
+================
+
+A program is a .js or .ts file. Double-click it to run it.
+
+  export const title = "Clock";              // optional window title
+  export const icon = "picture";             // optional, for the dock:
+                                             // program file folder picture terminal
+  export const sizes = [[240, 80], [160, 120]];
+      // the window sizes you support. The OS picks the one that fits the
+      // screen best (desktop 720x480, phones 270x480), preferring sizes
+      // shaped like the screen, then the biggest.
+  export default function main(sys) {        // runs once
+    sys.ui.render([ sys.ui.text(8, 8, new Date().toTimeString()) ]);
+  }
+
+Programs run in their own sandbox. They can't use fetch, storage or any other
+web API; everything goes through `sys`.
+
+IMPORTS
+  import { Folder } from "./lib/folder.ts";          // next to your program
+  import { x } from "/com/box/bob/Public/x.ts";      // anything shared with *
+Imports must be in your program's folder (or below), or readable by everyone.
+Look at Desktop.ts, Files.ts and lib/folder.ts in Apps for examples.
+
+sys.size          { w, h } of your window
+sys.args          how you were opened, e.g. { file: "/localhost/you/notes.txt" }
+sys.me            "you@your.box"
+sys.home          your home folder (the desktop)
+sys.self          where this program lives
+sys.colors        the current theme's colors, by name (see COLORS)
+
+UI  (positions are pixels inside your window; there is no layout)
+
+sys.ui.render(list)          replace your window with these elements
+                             (nested arrays and false/null are fine)
+sys.ui.text(x, y, text, {color, w, bg, align, font})
+                             w = wrap width; align left|center|right (needs w)
+sys.ui.rect(x, y, w, h, fill, stroke)
+sys.ui.line(x1, y1, x2, y2, color)
+sys.ui.button(x, y, w, h, label, onClick, {disabled, primary})
+                             18-20 tall looks right; primary = accent colored
+sys.ui.input(x, y, w, h, value, onChange, {multiline, password, readonly,
+                                           placeholder, onSubmit, font, key})
+sys.ui.bitmap(x, y, w, h, pw, ph, rgba)   rgba: Uint8ClampedArray, pw*ph*4
+sys.ui.area(x, y, w, h, onPointer, {hover, menu, onMenu})
+                             e = { type: down|move|up|wheel|menu|drop, x, y, dy }
+                             drop: files dragged in, e.files = [{name, data}]
+                             hover: a color to fill it with under the mouse
+                             menu: ["Open", null, {label: "Delete", disabled: true}]
+                               shown on right-click; onMenu(index) when picked
+sys.ui.onKey(fn)                          e = { key, ctrl, shift, alt, meta }
+sys.ui.onTheme(fn)                        the user switched themes; redraw
+sys.ui.focus(key)                         put the cursor in that input
+sys.ui.icons                              { folder, file, program, picture, ... }
+
+DIALOGS
+await sys.ui.prompt({ title, text, fields: [{ label, value }], ok })
+                                          -> field values, or null
+await sys.ui.confirm(title, text, okLabel) -> true/false
+await sys.ui.alert(text)
+
+MENUS  (in the menu bar, after your program's name, while your window is in front)
+sys.ui.setMenus([
+  { label: "File", items: [
+    { label: "Save", onClick: save, hint: "Ctrl+S", disabled: !dirty },
+    null,                                  // a separator
+    { label: "Clear", onClick: clear },
+  ] },
+])                                         call again whenever they change
+
+TEXT
+Three fonts: "ui" (proportional, the default), "bold", and "mono" (6px per
+character).
+Lines are 12px apart; capitals are 8px tall.
+sys.ui.lineHeight                 12
+sys.ui.measure(text, font)        width in pixels
+sys.ui.wrap(text, width, font)    -> lines
+sys.ui.fit(text, width, font)     shortened with ".." to fit
+
+Give inputs a `key` if the list of elements changes shape between renders,
+so they keep their cursor. Selecting, copying and pasting text in inputs is
+done for you.
+
+COLORS
+Use names, not hex, so your program follows the user's theme.
+  Roles:  panel (window background)  field (inputs, buttons)  hover  text
+          dim  line (borders)  accent  accentText (text on accent)
+          desk  dots  shadow
+  Hues (same in every theme):
+          red orange yellow green teal blue purple pink brown black gray white
+
+FILES  (paths may start with ~; the first use asks the user for the folder)
+
+await sys.fs.read(path)          -> string
+await sys.fs.readBytes(path)     -> Uint8Array
+await sys.fs.write(path, stringOrBytes)
+await sys.fs.list(path)          -> [{ name, path, type, size, target }]
+await sys.fs.exists(path)
+await sys.fs.mkdir(path)
+await sys.fs.remove(path)
+await sys.fs.stat(path)          -> { path, type, size, mtime }
+await sys.fs.rename(from, to)
+await sys.fs.link(path, target)  target: any full path, even on another box
+await sys.fs.sharing(path)       -> { read, write }  (things you own)
+await sys.fs.share(path, { read: ["bob", "*"], write: [] })
+await sys.fs.upload(dir)         the user picks files from their device
+sys.fs.onChange((dir) => ...)    something in a folder changed
+
+ASKING FOR A FILE  (the user picks; then you may use it, no more questions)
+await sys.fs.pick()                              -> path of a file, or null
+await sys.fs.pick({ mode: "save", name: "Untitled.txt" })
+await sys.fs.pick({ mode: "folder", write: true })
+await sys.fs.pick({ mode: "open", write: true })  open it to change it
+
+A file you were opened with (sys.args.file) needs no permission. Files can be
+on other boxes; that's handled for you. "/" and "/com" list the boxes.
+
+WEB APIS  (asks the user once per origin)
+await sys.net.fetch(url, {method, headers, body}) -> { status, headers, body }
+Straight from the user's browser, https only, no cookies, no redirects. Only
+APIs that allow cross-origin requests (CORS) will answer; ordinary websites won't.
+
+OTHER PROGRAMS  (asks the user once per program)
+await sys.apps.send(programPath, data)   starts it if it isn't running
+sys.apps.onMessage((from, data) => ...)
+await sys.apps.open(path)                open something like a double-click
+await sys.apps.open(path, {edit: true})  open a program's source instead
+
+ASKING UP FRONT
+await sys.request({ folder: "~/Notes", write: true })   -> true/false
+await sys.request({ net: "https://api.example.com" })
+await sys.request({ app: "~/Other.ts" })
+
+sys.setTitle(text)
+sys.quit()

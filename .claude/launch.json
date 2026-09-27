@@ -1,0 +1,26 @@
+{
+  "version": "0.0.1",
+  "configurations": [
+    {
+      "name": "box-a",
+      "runtimeExecutable": "env",
+      "runtimeArgs": ["BOX_DOMAIN=a.test", "PORT=3101", "BOX_PUBLIC_URL=http://localhost:3101", "BOX_DATA=./data-a",
+        "BOX_PEERS=b.test=http://localhost:3102", "BOX_DIRECTORY=http://localhost:3500", "bun", "--watch", "server/index.ts"],
+      "port": 3101
+    },
+    {
+      "name": "box-b",
+      "runtimeExecutable": "env",
+      "runtimeArgs": ["BOX_DOMAIN=b.test", "PORT=3102", "BOX_PUBLIC_URL=http://localhost:3102", "BOX_DATA=./data-b",
+        "BOX_PEERS=a.test=http://localhost:3101", "BOX_DIRECTORY=http://localhost:3500", "bun", "--watch", "server/index.ts"],
+      "port": 3102
+    },
+    {
+      "name": "directory",
+      "runtimeExecutable": "env",
+      "runtimeArgs": ["DIR_PORT=3500", "DIR_DATA=./data-directory", "DIR_PEERS=a.test=http://localhost:3101,b.test=http://localhost:3102",
+        "bun", "--watch", "directory/index.ts"],
+      "port": 3500
+    }
+  ]
+}

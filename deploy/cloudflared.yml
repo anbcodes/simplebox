@@ -1,0 +1,11 @@
+# Cloudflare Tunnel for the anb.codes box: box.anb.codes -> the box on localhost,
+# and dir.anb.codes -> the directory of boxes.
+# The credentials file is secret and stays in ~/.cloudflared (not in this repo).
+tunnel: fcee0c43-4459-4c8b-8b58-40530099b5a6
+credentials-file: /home/andrew/.cloudflared/fcee0c43-4459-4c8b-8b58-40530099b5a6.json
+ingress:
+  - hostname: box.anb.codes
+    service: http://127.0.0.1:7430
+  - hostname: dir.anb.codes
+    service: http://127.0.0.1:7431
+  - service: http_status:404
