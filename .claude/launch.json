@@ -2,6 +2,12 @@
   "version": "0.0.1",
   "configurations": [
     {
+      "name": "dev",
+      "runtimeExecutable": "bun",
+      "runtimeArgs": ["run", "dev"],
+      "port": 3000
+    },
+    {
       "name": "box-a",
       "runtimeExecutable": "env",
       "runtimeArgs": ["BOX_DOMAIN=a.test", "PORT=3101", "BOX_PUBLIC_URL=http://localhost:3101", "BOX_DATA=./data-a",

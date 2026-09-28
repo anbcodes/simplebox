@@ -193,15 +193,19 @@ export class Procs {
         proc.post({ type: "start", size: [win.w, win.h] });
         break;
       }
-      case "render":
-        proc.els = (m.els as El[]).map((el) => {
-          if (el.t === "button" || el.t === "input" || el.t === "area") {
-            el.on = (kind, data) => proc.post({ type: "event", id: el.id, kind, data });
-          }
-          return el;
-        });
+      case "render": {
+        const wire = (els: El[]): El[] =>
+          els.map((el) => {
+            if (el.t === "button" || el.t === "input" || el.t === "area" || el.t === "scroll") {
+              el.on = (kind, data) => proc.post({ type: "event", id: el.id, kind, data });
+            }
+            if (el.t === "scroll") el.children = wire(el.children as El[]);
+            return el;
+          });
+        proc.els = wire(m.els as El[]);
         screen.invalidate();
         break;
+      }
       case "menus":
         proc.menus = Array.isArray(m.menus) ? m.menus : [];
         screen.invalidate();
@@ -209,6 +213,9 @@ export class Procs {
       case "focus":
         // After this render has been drawn, so the input is there.
         if (proc.win) requestAnimationFrame(() => proc.win && screen.focusKey(proc.win, m.key));
+        break;
+      case "scrollTo":
+        if (proc.win) requestAnimationFrame(() => proc.win && screen.scrollKey(proc.win, m.key, m.y));
         break;
       case "title":
         if (proc.win) proc.win.title = m.title;

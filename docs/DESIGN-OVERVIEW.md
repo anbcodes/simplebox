@@ -40,7 +40,7 @@ boxes, and links (symlinks) can point anywhere, including at other boxes.
 - **Client** (`client/`): plain TypeScript bundled by Bun, with no framework. The
   OS runs on the main thread; each program runs in its own Web Worker.
 - **System programs** (`system/`): Desktop, Files, Terminal, Editor, Paint,
-  Hello, Weather, a shared `lib/folder.ts` and `API.txt`, copied into a
+  Hello, Weather, Scrolling, a shared `lib/folder.ts` and `API.txt`, copied into a
   world-readable `system` home on every box. The desktop and the file browser
   are programs like any other; the shell only has the menu bar, dialogs,
   themes and the permissions windows.

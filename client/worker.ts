@@ -4,7 +4,7 @@
  * usual web APIs are removed besides: a program gets `sys` and nothing else.
  */
 import { icons } from "./icons";
-import { LINE_H, fit, flatten, measure, ui, wrap, type El, type Els, type Font, type KeyEvent, type MenuItem, type On } from "./ui";
+import { LINE_H, SCROLL_W, fit, flatten, measure, ui, wrap, type El, type Els, type Font, type KeyEvent, type MenuItem, type On } from "./ui";
 
 const post = self.postMessage.bind(self);
 const makeURL = URL.createObjectURL;
@@ -48,17 +48,20 @@ const menuItem = (it: MenuItem | { label: string; disabled?: boolean; hint?: str
   it && typeof it === "object" ? { label: String(it.label), disabled: !!it.disabled, hint: it.hint === undefined ? undefined : String(it.hint) } : it;
 
 function render(els: Els) {
-  const list = flatten(els);
   const count: Record<string, number> = {};
   const next = new Map<string, On>();
-  const out = list.map((el) => {
-    const id = el.key ?? `${el.t}${(count[el.t] = (count[el.t] ?? 0) + 1)}`;
-    if (el.on) next.set(id, el.on);
-    const { on, ...rest } = el;
-    // Menus may be written with their onClick handlers; only the labels go to the screen.
-    if (rest.t === "area" && Array.isArray(rest.menu)) rest.menu = rest.menu.map(menuItem);
-    return { ...rest, id } as El;
-  });
+  // Ids are unique across the whole window, children of scroll groups included.
+  const strip = (list: El[]): El[] =>
+    list.map((el) => {
+      const id = el.key ?? `${el.t}${(count[el.t] = (count[el.t] ?? 0) + 1)}`;
+      if (el.on) next.set(id, el.on);
+      const { on, ...rest } = el;
+      // Menus may be written with their onClick handlers; only the labels go to the screen.
+      if (rest.t === "area" && Array.isArray(rest.menu)) rest.menu = rest.menu.map(menuItem);
+      if (rest.t === "scroll") rest.children = strip(flatten(rest.children ?? []));
+      return { ...rest, id } as El;
+    });
+  const out = strip(flatten(els));
   handlers = next;
   post({ type: "render", els: out });
 }
@@ -97,6 +100,8 @@ function makeSys(init: Init, start: [number, number]) {
       ...ui,
       /** Line height of text, in pixels. */
       lineHeight: LINE_H,
+      /** Width of a scroll group's scroll bar, in pixels. */
+      scrollBarWidth: SCROLL_W,
       /** Width of one line of text in pixels. */
       measure: (text: string, font: Font = "ui") => measure(text, font),
       /** Word-wrap text to a width. */
@@ -132,6 +137,8 @@ function makeSys(init: Init, start: [number, number]) {
       },
       /** Put the text cursor in your input with this `key`. */
       focus: (key: string) => post({ type: "focus", key: String(key) }),
+      /** Scroll your scroll group with this `key` so `y` is at the top of its view. */
+      scrollTo: (key: string, y: number) => post({ type: "scrollTo", key: String(key), y: Number(y) || 0 }),
       /** The system's 16x16 icons (RGBA), for sys.ui.bitmap. */
       icons,
       /** Ask the user something in a dialog. Resolves to the fields' values, or null if cancelled. */

@@ -5,7 +5,7 @@
  */
 import { Gfx } from "./gfx";
 import { MONO_W, charAt, indexAt } from "./font";
-import { LINE_H, fit, flatten, measure, wrap, type El, type Els, type Font, type KeyEvent, type MenuItem, type Theme } from "./ui";
+import { LINE_H, SCROLL_W, fit, flatten, measure, wrap, type El, type Els, type Font, type KeyEvent, type MenuItem, type Theme } from "./ui";
 
 export const MENU_H = 16;
 /** Window chrome: 1px border + 15px title bar + 1px separator above the content; 1px border below. */
@@ -68,13 +68,27 @@ export type Dropped = { name: string; data: Uint8Array };
 export type BarMenu = { label: string; bold?: boolean; items: MenuItem[]; pick: (i: number) => void };
 export type MenuBar = { menus: BarMenu[]; right?: string };
 
+/**
+ * Something on screen that takes the pointer. For elements, (ox, oy) is the
+ * screen position of the coordinates they were placed in, and `box` is the
+ * scroll group they're in, if any.
+ */
 type Hit = {
   x: number; y: number; w: number; h: number;
   win: Win | null;
-  kind: "frame" | "title" | "close" | "min" | "el";
+  kind: "frame" | "title" | "close" | "min" | "el" | "scroll" | "scrollbar";
   el?: Hot;
   key?: string;
+  ox?: number; oy?: number;
+  box?: Box;
 };
+
+type ScrollEl = Extract<El, { t: "scroll" }>;
+/** A scroll group as drawn: `top` is the screen y of its view; `parent` is the group it's in. */
+type Box = { key: string; el: ScrollEl; top: number; parent?: Box };
+/** `el` is the group as last drawn. */
+type ScrollState = { y: number; content: number; el: ScrollEl };
+type Clip = { x: number; y: number; w: number; h: number };
 
 /** `anc` is where the selection started; the selection is anc..cur (either way round). */
 type InputState = { value: string; app: string; cur: number; anc: number; sx: number; sy: number; follow: boolean };
@@ -112,6 +126,15 @@ export class Screen {
 
   private hits: Hit[] = [];
   private inputs = new Map<string, InputState>();
+  private scrolls = new Map<string, ScrollState>();
+  /** Dragging a scroll bar's thumb; `grab` is where on the thumb it was taken. */
+  private thumbDrag: { box: Box; grab: number } | null = null;
+  /**
+   * A finger down in a scroll group: nothing else hears about it until it
+   * either moves (and scrolls the group) or lifts (and is replayed as a tap).
+   */
+  private pan: { box: Box; x: number; y: number; from: number; shift: boolean; moved: boolean; timer: ReturnType<typeof setTimeout> } | null = null;
+  private replaying = false;
   private active: { key: string; el: InputEl; win: Win | null } | null = null;
   private pressed: Hit | null = null;
   private pressedInside = false;
@@ -574,20 +597,88 @@ export class Screen {
     });
   }
 
-  private paintEls(els: El[], win: Win | null, ox: number, oy: number, clip: { x: number; y: number; w: number; h: number }) {
-    const count: Record<string, number> = {};
+  private paintEls(
+    els: El[], win: Win | null, ox: number, oy: number, clip: Clip,
+    box?: Box, count: Record<string, number> = {},
+  ) {
     for (const el of els) {
       if (el.id === undefined) el.id = el.key ?? `${el.t}${(count[el.t] = (count[el.t] ?? 0) + 1)}`;
       const key = `${win?.id ?? 0}:${el.id}`;
+      if (el.t === "scroll") {
+        this.paintScroll(el, win, key, ox, oy, clip, count, box);
+        continue;
+      }
       this.drawEl(el, win, key);
       if (el.t === "button" || el.t === "input" || el.t === "area") {
-        const x0 = Math.max(ox + el.x, clip.x), y0 = Math.max(oy + el.y, clip.y);
-        const x1 = Math.min(ox + el.x + el.w, clip.x + clip.w), y1 = Math.min(oy + el.y + el.h, clip.y + clip.h);
-        if (x1 > x0 && y1 > y0) {
-          this.hits.push({ x: x0, y: y0, w: x1 - x0, h: y1 - y0, win, kind: "el", el, key });
-        }
+        const r = cut(clip, ox + el.x, oy + el.y, el.w, el.h);
+        if (r) this.hits.push({ ...r, win, kind: "el", el, key, ox, oy, box });
       }
     }
+  }
+
+  // ---- Scroll groups -------------------------------------------------------------
+
+  /** The furthest a group can scroll: a whole number of `snap`s, so the end can be reached. */
+  private maxScroll(el: ScrollEl, content: number) {
+    const over = Math.max(0, content - el.h);
+    return el.snap && el.snap > 0 ? Math.ceil(over / el.snap) * el.snap : over;
+  }
+
+  /** Move a group's view (snapped and clamped), telling its owner if it moved. */
+  private scrollTo(box: Box, y: number) {
+    const st = this.scrolls.get(box.key);
+    if (!st) return;
+    const { el } = box;
+    if (el.snap && el.snap > 0) y = Math.round(y / el.snap) * el.snap;
+    y = Math.max(0, Math.min(this.maxScroll(el, st.content), Math.round(y)));
+    if (y === st.y) return;
+    st.y = y;
+    el.on?.("scroll", y);
+    this.invalidate();
+  }
+
+  /** Where the thumb is, relative to the top of the view, or null if there's nothing to scroll. */
+  private thumb(el: ScrollEl, st: ScrollState) {
+    const max = this.maxScroll(el, st.content);
+    if (max <= 0) return null;
+    const track = el.h - 2;
+    const h = Math.max(12, Math.min(track, Math.round((track * el.h) / (el.h + max))));
+    return { y: 1 + Math.round(((track - h) * st.y) / max), h, max, room: track - h };
+  }
+
+  private paintScroll(
+    el: ScrollEl, win: Win | null, key: string, ox: number, oy: number, clip: Clip,
+    count: Record<string, number>, parent?: Box,
+  ) {
+    const g = this.g;
+    const children = flatten(el.children ?? []);
+    const content = el.contentH ?? children.reduce((m, c) => Math.max(m, bottomOf(c)), 0);
+    let st = this.scrolls.get(key);
+    if (!st) this.scrolls.set(key, (st = { y: 0, content, el }));
+    st.content = content;
+    st.el = el;
+    const box: Box = { key, el, top: oy + el.y, parent };
+    this.scrollTo(box, st.y); // the content may have shrunk
+    const vw = Math.max(0, el.w - SCROLL_W);
+    const view = cut(clip, ox + el.x, oy + el.y, vw, el.h);
+    // The empty part of the view takes the wheel, and clicks go no further.
+    if (view) this.hits.push({ ...view, win, kind: "scroll", key, box });
+    g.within(el.x, el.y, vw, el.h, () => {
+      g.ctx.translate(0, -st.y);
+      this.paintEls(children, win, ox + el.x, oy + el.y - st.y, view ?? { x: 0, y: 0, w: 0, h: 0 }, box, count);
+    });
+
+    // The scroll bar: a track, and a thumb if there's anywhere to go.
+    const bx = el.x + vw;
+    g.fill(bx, el.y, SCROLL_W, el.h, "field");
+    g.fill(bx, el.y, 1, el.h, "line");
+    const t = this.thumb(el, st);
+    if (t) {
+      const hot = this.thumbDrag?.box.key === key || this.hover === `thumb:${key}`;
+      g.round(bx + 2, el.y + t.y, SCROLL_W - 3, t.h, this.thumbDrag?.box.key === key ? "accent" : hot ? "hover" : "panel", "line");
+    }
+    const bar = cut(clip, ox + bx, oy + el.y, SCROLL_W, el.h);
+    if (bar) this.hits.push({ ...bar, win, kind: "scrollbar", key, box });
   }
 
   private drawEl(el: El, win: Win | null, key: string) {
@@ -726,9 +817,8 @@ export class Screen {
     const el = hit.el as InputEl;
     const st = this.state(hit.key!, el);
     const { top, font } = this.metrics(el);
-    const [ox, oy] = hit.win ? this.origin(hit.win) : [0, 0];
-    const lx = px - ox - el.x - 3;
-    const ly = py - oy - top;
+    const lx = px - hit.ox! - el.x - 3;
+    const ly = py - hit.oy! - top;
     const lines = this.shown(el, st).split("\n");
     const line = Math.min(lines.length - 1, Math.max(0, st.sy + (el.multiline ? Math.floor(ly / LINE_H) : 0)));
     const col = st.sx + (char ? charAt : indexAt)(lines[line]!.slice(st.sx), lx, font);
@@ -857,6 +947,13 @@ export class Screen {
   }
 
   /** Put the cursor at the end of a window's input with this `key` (for programs). */
+  /** Scroll a window's group with this `key` so `y` is at the top of its view. */
+  scrollKey(win: Win, key: string, y: number) {
+    const k = `${win.id}:${key}`;
+    const st = this.scrolls.get(k);
+    if (st) this.scrollTo({ key: k, el: st.el, top: 0 }, y);
+  }
+
   focusKey(win: Win, key: string) {
     if (this.queued) this.paint();
     const h = this.hits.find((h) => h.win === win && h.key === `${win.id}:${key}` && h.el?.t === "input");
@@ -974,8 +1071,7 @@ export class Screen {
   }
 
   private local(h: Hit, x: number, y: number) {
-    const [ox, oy] = h.win ? this.origin(h.win) : [0, 0];
-    return { x: x - ox - h.el!.x, y: y - oy - h.el!.y };
+    return { x: x - h.ox! - h.el!.x, y: y - h.oy! - h.el!.y };
   }
 
   private setHover(key: string | null) {
@@ -986,13 +1082,14 @@ export class Screen {
 
   /** What the mouse is over, for highlighting it. */
   private hoverAt(x: number, y: number) {
-    if (this.popup || this.drag || this.captured || this.selecting || this.pressed) return;
+    if (this.popup || this.drag || this.captured || this.selecting || this.pressed || this.thumbDrag) return;
     const bar = this.barAt(x, y);
     const docked = bar === null ? this.dockAt(x, y) : null;
     const h = bar === null && !docked ? this.hitAt(x, y) : null;
     this.setHover(
       bar !== null ? `bar:${bar}` : docked ? `dock:${docked.id}`
-        : h?.kind === "close" || h?.kind === "min" ? `${h.kind}:${h.win!.id}` : h?.kind === "el" ? h.key! : null,
+        : h?.kind === "close" || h?.kind === "min" ? `${h.kind}:${h.win!.id}` : h?.kind === "el" ? h.key!
+        : h?.kind === "scrollbar" && this.onThumb(h, y) ? `thumb:${h.key}` : null,
     );
     const cursor = h?.el?.t === "input" ? "text" : "default";
     if (this.view.style.cursor !== cursor) this.view.style.cursor = cursor;
@@ -1010,6 +1107,7 @@ export class Screen {
     if (h?.el?.t !== "input") this.active = null;
     if (!h) return this.invalidate();
     if (h.win) this.raise(h.win);
+    if (h.kind === "scroll" || h.kind === "scrollbar") return this.invalidate();
     if (h.kind !== "el") {
       const win = h.win!;
       return this.winMenu(x, y, win, { label: "Minimize", disabled: win.modal }, () => this.minimize(win));
@@ -1049,7 +1147,8 @@ export class Screen {
   /** Stop whatever a press started, e.g. because a long press became a right-click. */
   private cancelPress(x: number, y: number) {
     if (this.captured) this.captured.el!.on?.("pointer", { type: "up", ...this.local(this.captured, x, y) });
-    this.captured = this.pressed = this.selecting = this.drag = null;
+    if (this.pan) clearTimeout(this.pan.timer);
+    this.captured = this.pressed = this.selecting = this.drag = this.thumbDrag = this.pan = null;
   }
 
   private down(x: number, y: number, pointerType: string, button: number, shift: boolean) {
@@ -1072,6 +1171,20 @@ export class Screen {
     }
 
     const h = this.hitAt(x, y);
+    if (pointerType === "touch" && !this.replaying && h?.box && h.kind !== "scrollbar") {
+      const box = this.pannable(h.box);
+      if (box) {
+        if (h.win) this.raise(h.win);
+        const timer = setTimeout(() => {
+          // Held still: a long press, as if the group weren't there.
+          if (!this.pan || this.pan.moved) return;
+          this.pan = null;
+          this.context(x, y);
+        }, LONG_PRESS);
+        this.pan = { box, x, y, from: this.scrolls.get(box.key)!.y, shift, moved: false, timer };
+        return this.invalidate();
+      }
+    }
     const keepKeys = h?.el?.t === "input";
     if (!keepKeys) {
       this.active = null;
@@ -1093,6 +1206,7 @@ export class Screen {
     if (h.win) this.raise(h.win);
     if (h.kind === "title") this.drag = { win: h.win!, dx: x - h.win!.x, dy: y - h.win!.y };
     else if (h.kind === "close" || h.kind === "min") { this.pressed = h; this.pressedInside = true; }
+    else if (h.kind === "scrollbar") this.barDown(h, y);
     else if (h.el?.t === "button") {
       if (!h.el.disabled) { this.pressed = h; this.pressedInside = true; }
     } else if (h.el?.t === "area") {
@@ -1119,12 +1233,24 @@ export class Screen {
       if (p.bar !== undefined && bar !== null && bar !== p.bar) this.openBar(bar);
       return;
     }
-    if (this.drag) {
+    if (this.pan) {
+      const p = this.pan;
+      if (!p.moved && Math.abs(x - p.x) + Math.abs(y - p.y) > 6) {
+        p.moved = true;
+        clearTimeout(p.timer);
+      }
+      if (p.moved) this.scrollTo(p.box, p.from - (y - p.y));
+    } else if (this.drag) {
       const w = this.drag.win;
       w.x = x - this.drag.dx;
       w.y = y - this.drag.dy;
       this.clampWin(w);
       this.invalidate();
+    } else if (this.thumbDrag) {
+      const { box, grab } = this.thumbDrag;
+      const st = this.scrolls.get(box.key);
+      const t = st && this.thumb(box.el, st);
+      if (t) this.scrollTo(box, ((y - box.top - grab - 1) / Math.max(1, t.room)) * t.max);
     } else if (this.captured) {
       this.captured.el!.on?.("pointer", { type: "move", ...this.local(this.captured, x, y) });
     } else if (this.selecting) {
@@ -1163,8 +1289,19 @@ export class Screen {
       }
       return;
     }
+    if (this.pan) {
+      const p = this.pan;
+      this.pan = null;
+      clearTimeout(p.timer);
+      if (p.moved) return this.invalidate();
+      // It never moved: it was a tap on whatever is under it.
+      this.replaying = true;
+      this.down(p.x, p.y, pointerType, 0, p.shift);
+      this.replaying = false;
+    }
     this.drag = null;
     this.selecting = null;
+    this.thumbDrag = null;
     if (this.captured) {
       const c = this.captured;
       this.captured = null;
@@ -1191,8 +1328,42 @@ export class Screen {
       const lines = st.value.split("\n").length;
       st.sy = Math.max(0, Math.min(lines - 1, st.sy + dy * 3));
       this.invalidate();
+    } else if (h?.box) {
+      // In a scroll group the group scrolls, even over an area.
+      const { el } = h.box;
+      const step = el.snap && el.snap > 0 ? el.snap * Math.max(1, Math.round(36 / el.snap)) : 36;
+      this.scrollTo(h.box, (this.scrolls.get(h.box.key)?.y ?? 0) + dy * step);
     } else if (h?.el?.t === "area") {
       h.el.on?.("pointer", { type: "wheel", dy, ...this.local(h, x, y) });
+    }
+  }
+
+  /** The innermost group, from `box` outwards, that has somewhere to scroll. */
+  private pannable(box: Box | undefined): Box | null {
+    for (let b = box; b; b = b.parent) {
+      const st = this.scrolls.get(b.key);
+      if (st && this.maxScroll(b.el, st.content) > 0) return b;
+    }
+    return null;
+  }
+
+  private onThumb(h: Hit, y: number) {
+    const st = this.scrolls.get(h.box!.key);
+    const t = st && this.thumb(h.box!.el, st);
+    return !!t && y >= h.box!.top + t.y && y < h.box!.top + t.y + t.h;
+  }
+
+  /** On the thumb: drag it. Above or below it: a page up or down. */
+  private barDown(h: Hit, y: number) {
+    const box = h.box!;
+    const st = this.scrolls.get(box.key);
+    const t = st && this.thumb(box.el, st);
+    if (!st || !t) return;
+    if (this.onThumb(h, y)) this.thumbDrag = { box, grab: y - box.top - t.y };
+    else {
+      const snap = box.el.snap && box.el.snap > 0 ? box.el.snap : 1;
+      const page = Math.max(snap, Math.floor((box.el.h - LINE_H) / snap) * snap);
+      this.scrollTo(box, st.y + (y < box.top + t.y ? -page : page));
     }
   }
 
@@ -1225,4 +1396,25 @@ function lineCol(s: string, cur: number) {
   const before = s.slice(0, cur);
   const line = before.split("\n").length - 1;
   return { line, col: cur - (before.lastIndexOf("\n") + 1) };
+}
+
+/** The part of x, y, w, h inside `clip`, or null if none of it is. */
+function cut(clip: Clip, x: number, y: number, w: number, h: number): Clip | null {
+  const x0 = Math.max(x, clip.x), y0 = Math.max(y, clip.y);
+  const x1 = Math.min(x + w, clip.x + clip.w), y1 = Math.min(y + h, clip.y + clip.h);
+  return x1 > x0 && y1 > y0 ? { x: x0, y: y0, w: x1 - x0, h: y1 - y0 } : null;
+}
+
+/** How far down an element reaches, for a scroll group's content height. */
+function bottomOf(el: El): number {
+  switch (el.t) {
+    case "line":
+      return Math.max(el.y1, el.y2) + 1;
+    case "text": {
+      const n = el.w ? wrap(el.text, el.w, el.font ?? "ui").length : el.text.split("\n").length;
+      return el.y + n * LINE_H;
+    }
+    default:
+      return el.y + el.h;
+  }
 }
