@@ -111,9 +111,13 @@ export type El =
       placeholder?: string; readonly?: boolean; font?: Font;
     })
   | (Base & { t: "bitmap"; w: number; h: number; pw: number; ph: number; pixels: Uint8ClampedArray })
-  | (Base & { t: "area"; w: number; h: number; hover?: Color; menu?: MenuItem[] });
+  | (Base & { t: "area"; w: number; h: number; hover?: Color; menu?: MenuItem[] })
+  | (Base & { t: "scroll"; w: number; h: number; children: Els; contentH?: number; snap?: number });
 
 export type Els = (El | false | null | undefined | Els)[];
+
+/** The scroll bar along the right of a scroll group. */
+export const SCROLL_W = 10;
 
 export function flatten(els: Els, out: El[] = []): El[] {
   for (const e of els) {
@@ -167,6 +171,21 @@ export const ui = {
   ): El => {
     const { onMenu, ...rest } = opts;
     return { t: "area", x, y, w, h, ...rest, on: (k, e) => (k === "pointer" ? onPointer(e) : k === "menu" ? onMenu?.(e) : undefined) };
+  },
+
+  /**
+   * A w x h view onto `children`, scrolled by the OS, with a scroll bar
+   * (SCROLL_W wide) along its right edge. Children are positioned relative to
+   * the top left of the content and clipped to the view. `contentH` defaults to
+   * the bottom of the lowest child. `snap` rounds the position to a multiple of
+   * it (e.g. the line height). `onScroll` hears where the view is now.
+   */
+  scroll: (
+    x: number, y: number, w: number, h: number, children: Els,
+    opts: { key?: string; contentH?: number; snap?: number; onScroll?: (y: number) => void } = {},
+  ): El => {
+    const { onScroll, ...rest } = opts;
+    return { t: "scroll", x, y, w, h, children, ...rest, on: (k, v) => (k === "scroll" ? onScroll?.(v) : undefined) };
   },
 };
 

@@ -49,6 +49,17 @@ sys.ui.area(x, y, w, h, onPointer, {hover, menu, onMenu})
                              hover: a color to fill it with under the mouse
                              menu: ["Open", null, {label: "Delete", disabled: true}]
                                shown on right-click; onMenu(index) when picked
+sys.ui.scroll(x, y, w, h, children, {key, snap, contentH, onScroll})
+                             a scrolling view onto children (any elements,
+                             placed from the content's top left, clipped).
+                             The OS scrolls it: wheel, thumb, clicking the track,
+                             or dragging with a finger (so touch drags don't
+                             reach areas inside; taps and long presses do).
+                             The bar is sys.ui.scrollBarWidth wide, inside w.
+                             snap: scroll by multiples of it, e.g. lineHeight
+                             contentH: defaults to the lowest child's bottom
+                             onScroll(y): the view moved (no need to redraw)
+sys.ui.scrollTo(key, y)                   scroll that group so y is at the top
 sys.ui.onKey(fn)                          e = { key, ctrl, shift, alt, meta }
 sys.ui.onTheme(fn)                        the user switched themes; redraw
 sys.ui.focus(key)                         put the cursor in that input

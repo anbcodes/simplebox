@@ -30,7 +30,7 @@ bun run dev        # http://localhost:3000, sign up as you@localhost
 | `client/shell.ts` | Login, the menu bar, dialogs, themes, permissions |
 | `client/procs.ts` | Running programs and checking their permissions |
 | `client/worker.ts` | The sandbox each program runs in, and `sys` |
-| `system/` | Built-in programs: Desktop and Files (the desktop and file browser), Terminal, Editor, Paint, Weather, Hello |
+| `system/` | Built-in programs: Desktop and Files (the desktop and file browser), Terminal, Editor, Paint, Weather, Hello, Scrolling (a demo of scroll groups) |
 | `directory/index.ts` | The directory: a separate server that lists boxes, for `/` and `/com` |
 
 ## Configuration
